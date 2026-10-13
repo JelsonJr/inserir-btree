@@ -13,3 +13,6 @@ export interface TreePalette {
   error: string
   info: string
 }
+
+/** Seções do painel lateral. */
+export type PanelSection = 'operation' | 'bulk' | 'settings' | 'bench'

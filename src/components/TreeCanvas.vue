@@ -8,15 +8,15 @@
     </svg>
 
     <div v-if="!snapshot.root" class="tree-overlay">
-      <v-icon class="mb-3" color="primary" icon="mdi-file-tree-outline" size="72" />
+      <v-icon class="mb-3" color="primary" icon="mdi-file-tree-outline" size="64" />
       <div class="text-h6">Árvore vazia</div>
       <div class="text-body-2 text-medium-emphasis">
-        Insira valores no painel ao lado ou gere chaves aleatórias.
+        Digite um valor e pressione Enter, ou use um dos exemplos.
       </div>
     </div>
 
     <div v-else-if="tooLarge" class="tree-overlay">
-      <v-icon class="mb-3" color="warning" icon="mdi-alert-outline" size="64" />
+      <v-icon class="mb-3" color="warning" icon="mdi-alert-outline" size="56" />
       <div class="text-h6">Árvore grande demais para desenhar</div>
       <div class="text-body-2 text-medium-emphasis mb-4">
         {{ nodeCount.toLocaleString('pt-BR') }} nós — o desenho pode deixar o navegador lento.
@@ -26,28 +26,34 @@
       </v-btn>
     </div>
 
-    <div class="tree-toolbar">
-      <v-btn-group density="comfortable" divided rounded="lg" variant="tonal">
-        <v-btn aria-label="Aproximar" icon="mdi-plus" @click="zoomBy(1.3)" />
-        <v-btn aria-label="Afastar" icon="mdi-minus" @click="zoomBy(1 / 1.3)" />
-        <v-btn aria-label="Ajustar à tela" icon="mdi-fit-to-screen-outline" @click="fit(true)" />
-      </v-btn-group>
+    <v-sheet border class="tree-toolbar d-flex flex-column" elevation="2" rounded="lg">
+      <v-btn aria-label="Aproximar" density="comfortable" icon="mdi-plus" rounded="0" size="small" title="Aproximar" variant="text" @click="zoomBy(1.3)" />
+      <v-divider />
+      <v-btn aria-label="Afastar" density="comfortable" icon="mdi-minus" rounded="0" size="small" title="Afastar" variant="text" @click="zoomBy(1 / 1.3)" />
+      <v-divider />
+      <v-btn aria-label="Ajustar à tela" density="comfortable" icon="mdi-fit-to-screen-outline" rounded="0" size="small" title="Ajustar à tela (F)" variant="text" @click="fit(true)" />
+    </v-sheet>
+
+    <div class="tree-bottom">
+      <slot name="bottom" />
     </div>
   </div>
 </template>
 
 <script lang="ts" setup>
-  import * as d3 from 'd3'
-  import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
   import type { NodeSnapshot, StepKind, TreeSnapshot } from '@/lib/btree'
   import type { Highlight } from '@/stores/btree'
   import type { TreePalette } from './types'
+  import * as d3 from 'd3'
+  import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
   const props = defineProps<{
     snapshot: TreeSnapshot
     highlight: Highlight | null
     palette: TreePalette
     autoFit: boolean
+    /** Duração das transições, em milissegundos. */
+    duration: number
   }>()
 
   const emit = defineEmits<{
@@ -68,6 +74,7 @@
 
   type Point = d3.HierarchyPointNode<NodeSnapshot>
   interface Geometry { widths: number[], offsets: number[], total: number }
+  interface Placed { x: number, y: number }
 
   const container = ref<HTMLDivElement>()
   const svgEl = ref<SVGSVGElement>()
@@ -84,10 +91,16 @@
 
   let zoomBehavior: d3.ZoomBehavior<SVGSVGElement, unknown> | null = null
   let resizeObserver: ResizeObserver | null = null
+  let reducedMotion: MediaQueryList | null = null
   let bounds = { x0: 0, x1: 0, y0: 0, y1: 0 }
   let lastShape = ''
-  const viewport = { width: 0, height: 0 }
   let frame = 0
+  const viewport = { width: 0, height: 0 }
+
+  /** Posições do desenho anterior, usadas para animar de onde cada nó "veio". */
+  let previous = new Map<number, Placed>()
+  /** Vizinho (irmão ou pai) de cada nó no desenho anterior: destino de nós que somem. */
+  let previousNeighbor = new Map<number, number>()
 
   const formatKey = (k: number) => Number.isInteger(k) ? String(k) : String(Number(k.toFixed(4)))
 
@@ -104,7 +117,7 @@
     return { widths, offsets, total }
   }
 
-  function nodeColor (kind: StepKind | undefined): string {
+  function kindColor (kind: StepKind | undefined): string {
     const p = props.palette
     switch (kind) {
       case 'visit': return p.info
@@ -117,6 +130,37 @@
     }
   }
 
+  function effectiveDuration (count: number): number {
+    if (count > ANIMATION_LIMIT || reducedMotion?.matches) return 0
+    return Math.max(0, props.duration)
+  }
+
+  /** Posição inicial de um nó que acabou de surgir. */
+  function originOf (d: Point): Placed {
+    const siblings = d.parent?.children ?? []
+    const index = siblings.indexOf(d)
+    // Nó criado por divisão: nasce da posição do irmão de onde saiu.
+    for (let j = index - 1; j >= 0; j--) {
+      const pos = previous.get(siblings[j].data.id)
+      if (pos) return pos
+    }
+    for (let j = index + 1; j < siblings.length; j++) {
+      const pos = previous.get(siblings[j].data.id)
+      if (pos) return pos
+    }
+    if (d.parent) {
+      const pos = previous.get(d.parent.data.id)
+      if (pos) return { x: pos.x, y: pos.y + LEVEL_GAP }
+    }
+    // Nova raiz: surge logo acima da raiz antiga.
+    const child = d.children?.find(c => previous.has(c.data.id))
+    if (child) {
+      const pos = previous.get(child.data.id)!
+      return { x: pos.x, y: pos.y - LEVEL_GAP }
+    }
+    return { x: d.x, y: d.y }
+  }
+
   function render () {
     frame = 0
     const svg = svgEl.value
@@ -127,8 +171,10 @@
 
     if (!data) {
       nodeCount.value = 0
-      links.selectAll('*').remove()
-      nodes.selectAll('*').remove()
+      links.selectAll('*').interrupt('tree').remove()
+      nodes.selectAll('*').interrupt('tree').remove()
+      previous = new Map()
+      previousNeighbor = new Map()
       lastShape = ''
       return
     }
@@ -139,6 +185,7 @@
     if (tooLarge.value) {
       links.selectAll('*').remove()
       nodes.selectAll('*').remove()
+      previous = new Map()
       return
     }
 
@@ -146,11 +193,11 @@
     for (const d of descendants) geo.set(d.data.id, geometryOf(d.data.keys))
     const widthOf = (d: d3.HierarchyNode<NodeSnapshot>) => geo.get(d.data.id)!.total
 
-    const layout = d3.tree<NodeSnapshot>()
+    const points = d3.tree<NodeSnapshot>()
       .nodeSize([1, LEVEL_GAP])
-      .separation((a, b) => (widthOf(a) + widthOf(b)) / 2 + (a.parent === b.parent ? SIBLING_GAP : COUSIN_GAP))
-    const laidOut = layout(root)
-    const points = laidOut.descendants()
+      .separation((a, b) => (widthOf(a) + widthOf(b)) / 2 + (a.parent === b.parent ? SIBLING_GAP : COUSIN_GAP))(root)
+      .descendants()
+    const byId = new Map(points.map(d => [d.data.id, d]))
 
     bounds = { x0: Infinity, x1: -Infinity, y0: -NODE_H / 2, y1: -Infinity }
     for (const d of points) {
@@ -162,77 +209,107 @@
 
     const p = props.palette
     const hl = props.highlight
-    const hlIds = new Set(hl?.nodeIds ?? [])
+    const active = new Set(hl?.nodeIds ?? [])
+    const trail = new Set(hl?.trail ?? [])
+    const lit = (id: number) => active.has(id) || trail.has(id)
+    const activeColor = kindColor(hl?.kind)
     const maxKeys = props.snapshot.order - 1
-    // Árvores grandes são desenhadas sem transições: agendar milhares de
-    // transições custa mais do que o próprio desenho.
-    const t = points.length > ANIMATION_LIMIT ? null : d3.transition().duration(420).ease(d3.easeCubicOut)
+    const duration = effectiveDuration(points.length)
+    const lite = points.length > ANIMATION_LIMIT
+    const t = duration > 0
+      ? d3.transition('tree').duration(duration).ease(d3.easeCubicInOut)
+      : null
     if (!t) {
-      links.selectAll('path.link').interrupt()
-      nodes.selectAll('g.node').interrupt()
+      links.selectAll('path.link').interrupt('tree')
+      nodes.selectAll('*').interrupt('tree')
     }
 
     // ---- Arestas ---------------------------------------------------------
-    const linkPath = (d: Point) => {
-      const parent = d.parent!
-      const g = geo.get(parent.data.id)!
-      const index = parent.data.children.indexOf(d.data)
-      const anchor = index < g.offsets.length ? g.offsets[index] : g.total
-      const sx = parent.x - g.total / 2 + anchor
-      const sy = parent.y + NODE_H / 2
-      const tx = d.x
-      const ty = d.y - NODE_H / 2
+    const curve = (sx: number, sy: number, tx: number, ty: number) => {
       const my = (sy + ty) / 2
       return `M${sx},${sy}C${sx},${my} ${tx},${my} ${tx},${ty}`
     }
+    const linkPath = (d: Point) => {
+      const parent = d.parent!
+      const g = geo.get(parent.data.id)!
+      const index = parent.children!.indexOf(d)
+      const offset = index < g.offsets.length ? g.offsets[index] : g.total
+      return curve(parent.x - g.total / 2 + offset, parent.y + NODE_H / 2, d.x, d.y - NODE_H / 2)
+    }
+    const linkFrom = (d: Point) => {
+      const o = previous.get(d.data.id) ?? originOf(d)
+      return curve(o.x, o.y - NODE_H / 2, o.x, o.y - NODE_H / 2)
+    }
+    const linkColor = (d: Point) => {
+      if (!lit(d.data.id) || !lit(d.parent!.data.id)) return p.link
+      return active.has(d.data.id) ? activeColor : p.info
+    }
+    const linkWidth = (d: Point) => lit(d.data.id) && lit(d.parent!.data.id) ? 3 : 2
 
-    const linkStroke = (d: Point) => hlIds.has(d.data.id) && hlIds.has(d.parent!.data.id) ? nodeColor(hl?.kind) : p.link
     const linkSel = links.selectAll<SVGPathElement, Point>('path.link')
       .data(points.filter(d => d.parent), d => String(d.data.id))
       .join(
         enter => enter.append('path')
           .attr('class', 'link')
           .attr('fill', 'none')
-          .attr('stroke-width', 2)
           .attr('stroke-linecap', 'round')
-          .attr('d', linkPath)
-          .attr('opacity', 0),
+          .attr('stroke', p.link)
+          .attr('stroke-width', 2)
+          .attr('d', t ? linkFrom : linkPath)
+          .attr('opacity', t ? 0 : 1),
         update => update,
         exit => t ? exit.transition(t).attr('opacity', 0).remove() : exit.remove(),
       )
-    if (t) linkSel.transition(t).attr('d', linkPath).attr('opacity', 1).attr('stroke', linkStroke)
-    else linkSel.attr('d', linkPath).attr('opacity', 1).attr('stroke', linkStroke)
+    if (t) {
+      linkSel.transition(t)
+        .attr('d', linkPath)
+        .attr('opacity', 1)
+        .attr('stroke', linkColor)
+        .attr('stroke-width', linkWidth)
+    } else {
+      linkSel.attr('d', linkPath).attr('opacity', 1).attr('stroke', linkColor).attr('stroke-width', linkWidth)
+    }
 
     // ---- Nós -------------------------------------------------------------
-    // Em árvores grandes ("modo leve") cada nó vira apenas um retângulo e um
-    // texto, reduzindo drasticamente a quantidade de elementos SVG.
-    const lite = t === null
+    const place = (d: Placed, scale = 1) => `translate(${d.x},${d.y}) scale(${scale})`
+
     const groups = nodes.selectAll<SVGGElement, Point>('g.node')
       .data(points, d => String(d.data.id))
       .join(
         enter => {
           const g = enter.append('g')
             .attr('class', 'node')
-            .attr('opacity', 0)
-            .attr('transform', d => `translate(${d.parent?.x ?? d.x},${d.parent?.y ?? d.y})`)
+            .attr('opacity', t ? 0 : 1)
+            .attr('transform', d => t ? place(originOf(d), 0.75) : place(d))
+          g.append('rect').attr('class', 'pulse').attr('rx', 13).attr('fill', 'none').attr('stroke-width', 2)
           g.append('rect').attr('class', 'box').attr('rx', 10).attr('y', -NODE_H / 2).attr('height', NODE_H)
           g.append('g').attr('class', 'cells')
           return g
         },
         update => update,
-        exit => t ? exit.transition(t).attr('opacity', 0).remove() : exit.remove(),
+        exit => {
+          if (!t) return exit.remove()
+          // Nós que somem (fusão) deslizam até o vizinho com que se uniram.
+          return exit.transition(t)
+            .attr('opacity', 0)
+            .attr('transform', d => {
+              const neighbor = byId.get(previousNeighbor.get(d.data.id) ?? -1)
+              return place(neighbor ?? previous.get(d.data.id) ?? d, 0.75)
+            })
+            .remove()
+        },
       )
 
-    const place = (d: Point) => `translate(${d.x},${d.y})`
-    if (t) groups.transition(t).attr('opacity', 1).attr('transform', place)
-    else groups.attr('opacity', 1).attr('transform', place)
+    if (t) groups.transition(t).attr('opacity', 1).attr('transform', d => place(d))
+    else groups.attr('opacity', 1).attr('transform', d => place(d))
 
     groups.each(function (d) {
       const g = d3.select(this)
       const { widths, offsets, total } = geo.get(d.data.id)!
       const overflow = d.data.keys.length > maxKeys
-      const active = hlIds.has(d.data.id)
-      const color = overflow ? p.error : active ? nodeColor(hl?.kind) : p.border
+      const isActive = active.has(d.data.id)
+      const inTrail = !isActive && trail.has(d.data.id)
+      const stroke = overflow ? p.error : isActive ? activeColor : inTrail ? p.info : p.border
       const x0 = -total / 2
 
       g.selectAll('rect.shadow')
@@ -243,7 +320,7 @@
           .attr('height', NODE_H)
           .attr('rx', 10)
           .attr('fill', '#000')
-          .attr('opacity', 0.12))
+          .attr('opacity', 0.1))
         .attr('x', x0)
         .attr('width', total)
 
@@ -252,12 +329,31 @@
         .join('title')
         .text(`Nó #${d.data.id} — ${d.data.keys.length} chave(s)${d.children ? `, ${d.children.length} filho(s)` : ' (folha)'}`)
 
-      g.select('rect.box')
-        .attr('x', x0)
-        .attr('width', total)
+      const box = g.select<SVGRectElement>('rect.box')
         .attr('fill', p.surface)
-        .attr('stroke', color)
-        .attr('stroke-width', active || overflow ? 3 : 1.5)
+        .attr('stroke-dasharray', inTrail ? '5 4' : null)
+      if (box.attr('width') === null) box.attr('x', x0).attr('width', total)
+      if (t) {
+        box.transition(t)
+          .attr('x', x0)
+          .attr('width', total)
+          .attr('stroke', stroke)
+          .attr('stroke-width', isActive || overflow ? 3 : (inTrail ? 2 : 1.5))
+      } else {
+        box.attr('x', x0)
+          .attr('width', total)
+          .attr('stroke', stroke)
+          .attr('stroke-width', isActive || overflow ? 3 : (inTrail ? 2 : 1.5))
+      }
+
+      // Anel pulsante no nó em destaque.
+      g.select('rect.pulse')
+        .classed('pulsing', (isActive || overflow) && !lite)
+        .attr('x', x0 - 5)
+        .attr('y', -NODE_H / 2 - 5)
+        .attr('width', total + 10)
+        .attr('height', NODE_H + 10)
+        .attr('stroke', stroke)
 
       const cellsLayer = g.select<SVGGElement>('g.cells')
 
@@ -278,50 +374,94 @@
       }
 
       cellsLayer.selectAll('text.lite').remove()
-      cellsLayer
+      const cellTransform = (_k: number, i: number) => `translate(${x0 + offsets[i] + widths[i] / 2},0)`
+
+      // Células identificadas pela chave: ao inserir, as vizinhas deslizam para abrir espaço.
+      const cells = cellsLayer
         .selectAll<SVGGElement, number>('g.cell')
-        .data(d.data.keys)
-        .join(enter => {
-          const c = enter.append('g').attr('class', 'cell').style('cursor', 'pointer')
-          c.append('rect').attr('class', 'cell-bg')
-          c.append('line').attr('class', 'sep')
-          c.append('text').attr('class', 'key')
-          return c
-        })
-        .each(function (key, i) {
-          const c = d3.select(this)
-          const isKey = active && hl?.key === key
-          c.select('rect.cell-bg')
-            .attr('x', x0 + offsets[i] + 3)
-            .attr('y', -NODE_H / 2 + 3)
-            .attr('width', widths[i] - 6)
-            .attr('height', NODE_H - 6)
-            .attr('rx', 7)
-            .attr('fill', isKey ? nodeColor(hl?.kind) : 'transparent')
-          c.select('line.sep')
-            .attr('x1', x0 + offsets[i])
-            .attr('x2', x0 + offsets[i])
-            .attr('y1', -NODE_H / 2 + 7)
-            .attr('y2', NODE_H / 2 - 7)
-            .attr('stroke', p.muted)
-            .attr('stroke-width', 1)
-            .attr('opacity', i === 0 ? 0 : 0.5)
-          c.select('text.key')
-            .attr('x', x0 + offsets[i] + widths[i] / 2)
-            .attr('dy', '0.35em')
-            .attr('text-anchor', 'middle')
-            .attr('font-family', FONT)
-            .attr('font-size', 15)
-            .attr('font-weight', isKey ? 700 : 500)
-            .attr('fill', isKey ? p.background : p.text)
-            .text(formatKey(key))
-        })
+        .data(d.data.keys, k => String(k))
+        .join(
+          enter => {
+            const c = enter.append('g')
+              .attr('class', 'cell')
+              .style('cursor', 'pointer')
+              .attr('transform', cellTransform)
+              .attr('opacity', t ? 0 : 1)
+            c.append('rect').attr('class', 'cell-bg').attr('rx', 7).attr('y', -NODE_H / 2 + 3).attr('height', NODE_H - 6)
+            c.append('line').attr('class', 'sep').attr('y1', -NODE_H / 2 + 7).attr('y2', NODE_H / 2 - 7).attr('stroke-width', 1)
+            c.append('text').attr('class', 'key')
+              .attr('dy', '0.35em')
+              .attr('text-anchor', 'middle')
+              .attr('font-family', FONT)
+              .attr('font-size', 15)
+            return c
+          },
+          update => update,
+          exit => exit.remove(),
+        )
+
+      if (t) cells.transition(t).attr('opacity', 1).attr('transform', cellTransform)
+      else cells.attr('opacity', 1).attr('transform', cellTransform)
+
+      cells.each(function (key, i) {
+        const c = d3.select(this)
+        const isKey = isActive && hl?.key === key
+        const w = widths[i]
+        c.select('rect.cell-bg')
+          .attr('x', -w / 2 + 3)
+          .attr('width', w - 6)
+          .attr('fill', isKey ? activeColor : 'transparent')
+        c.select('line.sep')
+          .attr('x1', -w / 2)
+          .attr('x2', -w / 2)
+          .attr('stroke', p.muted)
+          .attr('opacity', i === 0 ? 0 : 0.5)
+        c.select('text.key')
+          .attr('font-weight', isKey ? 700 : 500)
+          .attr('fill', isKey ? p.background : p.text)
+          .text(formatKey(key))
+      })
     })
 
-    // Reajusta o zoom apenas quando a forma da árvore muda.
+    // Guarda posições e vizinhos para animar o próximo desenho.
+    previous = new Map(points.map(d => [d.data.id, { x: d.x, y: d.y }]))
+    previousNeighbor = new Map()
+    for (const d of points) {
+      const siblings = d.parent?.children ?? []
+      const index = siblings.indexOf(d)
+      const neighbor = index > 0 ? siblings[index - 1] : (siblings[1] ?? d.parent)
+      if (neighbor) previousNeighbor.set(d.data.id, neighbor.data.id)
+    }
+
+    // A câmera só se move quando a forma da árvore muda ou quando o nó em
+    // destaque sai da área visível.
     const shape = `${Math.round(bounds.x0)}:${Math.round(bounds.x1)}:${Math.round(bounds.y1)}`
-    if (props.autoFit && shape !== lastShape) fit(t !== null, true)
+    const moved = props.autoFit && shape !== lastShape && follow(duration)
     lastShape = shape
+    if (props.autoFit && !moved) {
+      const focus = points.find(d => active.has(d.data.id))
+      if (focus) keepVisible(focus, widthOf(focus), duration)
+    }
+  }
+
+  /** Desliza a câmera (sem mudar o zoom) para manter um nó dentro da tela. */
+  function keepVisible (point: Placed, width: number, duration: number) {
+    const svg = svgEl.value
+    if (!svg) return
+    const current = d3.zoomTransform(svg)
+    const margin = 72
+    const left = current.applyX(point.x - width / 2)
+    const right = current.applyX(point.x + width / 2)
+    const top = current.applyY(point.y - NODE_H / 2)
+    const bottom = current.applyY(point.y + NODE_H / 2)
+    let dx = 0
+    let dy = 0
+    if (left < margin) dx = viewport.width / 2 - current.applyX(point.x)
+    else if (right > viewport.width - margin) dx = viewport.width / 2 - current.applyX(point.x)
+    if (top < margin) dy = margin - top
+    else if (bottom > viewport.height - margin) dy = viewport.height - margin - bottom
+    if (dx === 0 && dy === 0) return
+    applyTransform(new d3.ZoomTransform(current.k, current.x + dx, current.y + dy), duration > 0 ? Math.max(duration, 300) : 0)
   }
 
   function scheduleRender () {
@@ -330,18 +470,13 @@
   }
 
   /**
-   * Enquadra a árvore. Com `readable`, árvores muito largas não são reduzidas
-   * abaixo de uma escala legível: a vista foca a raiz e o usuário arrasta
-   * para explorar o restante.
+   * Calcula o enquadramento. Com `readable`, árvores muito largas não são
+   * reduzidas abaixo de uma escala legível: a vista foca a raiz.
    */
-  function fit (animated = true, readable = false) {
-    const svg = svgEl.value
-    if (!svg || !zoomBehavior || !props.snapshot.root) return
-    // Usa o tamanho em cache (ResizeObserver): ler clientWidth logo após
-    // alterar o DOM forçaria um layout síncrono caro em árvores grandes.
+  function targetTransform (readable: boolean): d3.ZoomTransform | null {
     const { width, height } = viewport
-    if (width === 0 || height === 0) return
-    const pad = 48
+    if (width === 0 || height === 0 || !props.snapshot.root) return null
+    const pad = 56
     const bw = Math.max(1, bounds.x1 - bounds.x0)
     const bh = Math.max(1, bounds.y1 - bounds.y0)
     let scale = Math.max(MIN_SCALE, Math.min((width - pad * 2) / bw, (height - pad * 2) / bh, 1.5))
@@ -352,15 +487,48 @@
       cx = 0 // a raiz fica em x = 0 no layout
       cy = bounds.y0 + (height / 2 - pad) / scale
     }
-    const transform = d3.zoomIdentity.translate(width / 2 - cx * scale, height / 2 - cy * scale).scale(scale)
+    return d3.zoomIdentity.translate(width / 2 - cx * scale, height / 2 - cy * scale).scale(scale)
+  }
+
+  function applyTransform (transform: d3.ZoomTransform, duration: number) {
+    const svg = svgEl.value
+    if (!svg || !zoomBehavior) return
     const sel = d3.select(svg)
-    if (animated) sel.transition().duration(450).call(zoomBehavior.transform, transform)
-    else sel.call(zoomBehavior.transform, transform)
+    if (duration > 0) {
+      sel.transition('camera').duration(duration).ease(d3.easeCubicInOut).call(zoomBehavior.transform, transform)
+    } else {
+      sel.interrupt('camera').call(zoomBehavior.transform, transform)
+    }
+  }
+
+  /** Enquadra a árvore inteira (botão / tecla F). */
+  function fit (animated = true) {
+    const target = targetTransform(false)
+    if (target) applyTransform(target, animated && !reducedMotion?.matches ? 450 : 0)
+  }
+
+  /**
+   * Acompanha mudanças de forma suavemente: se a árvore continua visível e a
+   * escala ideal mudou pouco, a câmera fica parada (evita "tremidas").
+   */
+  function follow (duration: number): boolean {
+    const svg = svgEl.value
+    const target = targetTransform(true)
+    if (!svg || !target) return false
+    const current = d3.zoomTransform(svg)
+    const margin = 16
+    const visible = current.applyX(bounds.x0) >= margin
+      && current.applyX(bounds.x1) <= viewport.width - margin
+      && current.applyY(bounds.y0) >= margin
+      && current.applyY(bounds.y1) <= viewport.height - margin
+    if (visible && Math.abs(Math.log(target.k / current.k)) < 0.3) return false
+    applyTransform(target, duration > 0 ? Math.max(duration, 350) : 0)
+    return true
   }
 
   function zoomBy (factor: number) {
     if (!svgEl.value || !zoomBehavior) return
-    d3.select(svgEl.value).transition().duration(250).call(zoomBehavior.scaleBy, factor)
+    d3.select(svgEl.value).transition('camera').duration(250).call(zoomBehavior.scaleBy, factor)
   }
 
   // ---- Exportação --------------------------------------------------------
@@ -372,6 +540,7 @@
     const height = Math.ceil(bounds.y1 - bounds.y0 + pad * 2)
     const clone = layerEl.value.cloneNode(true) as SVGGElement
     clone.setAttribute('transform', `translate(${pad - bounds.x0},${pad - bounds.y0})`)
+    for (const el of clone.querySelectorAll('.pulse')) el.remove()
     const ns = 'http://www.w3.org/2000/svg'
     const out = document.createElementNS(ns, 'svg')
     out.setAttribute('xmlns', ns)
@@ -396,7 +565,7 @@
     return new Promise(resolve => {
       const img = new Image()
       const url = URL.createObjectURL(new Blob([built.markup], { type: 'image/svg+xml' }))
-      img.onload = () => {
+      img.addEventListener('load', () => {
         // Navegadores limitam o tamanho do canvas; reduz a escala se necessário.
         const maxSide = 16_000
         const s = Math.min(scale, maxSide / built.width, maxSide / built.height)
@@ -409,11 +578,11 @@
         ctx.scale(s, s)
         ctx.drawImage(img, 0, 0)
         canvas.toBlob(blob => resolve(blob), 'image/png')
-      }
-      img.onerror = () => {
+      })
+      img.addEventListener('error', () => {
         URL.revokeObjectURL(url)
         resolve(null)
-      }
+      })
       img.src = url
     })
   }
@@ -423,7 +592,8 @@
   // ---- Ciclo de vida -----------------------------------------------------
 
   onMounted(() => {
-    if (!svgEl.value || !layerEl.value) return
+    if (!svgEl.value || !layerEl.value || !nodesEl.value) return
+    reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)') ?? null
     const layer = d3.select(layerEl.value)
     zoomBehavior = d3.zoom<SVGSVGElement, unknown>()
       .scaleExtent([MIN_SCALE, 4])
@@ -441,24 +611,25 @@
       if (!rect) return
       viewport.width = rect.width
       viewport.height = rect.height
-      if (props.autoFit) fit(false, true)
+      if (props.autoFit) follow(0)
     })
     if (container.value) resizeObserver.observe(container.value)
 
     // Delegação de eventos: um único ouvinte para todas as chaves.
-    d3.select(nodesEl.value!).on('click', (event: MouseEvent) => {
+    d3.select(nodesEl.value).on('click', (event: MouseEvent) => {
       const cell = (event.target as Element).closest('g.cell') as (Element & { __data__?: number }) | null
       if (cell && typeof cell.__data__ === 'number') emit('selectKey', cell.__data__)
     })
 
     render()
-    fit(false, true)
+    const initial = targetTransform(true)
+    if (initial) applyTransform(initial, 0)
   })
 
   onBeforeUnmount(() => {
     if (frame) cancelAnimationFrame(frame)
     resizeObserver?.disconnect()
-    if (svgEl.value) d3.select(svgEl.value).on('.zoom', null).interrupt()
+    if (svgEl.value) d3.select(svgEl.value).on('.zoom', null).interrupt('camera')
   })
 
   watch(() => [props.snapshot, props.highlight, props.palette, forceRender.value], scheduleRender)
@@ -478,7 +649,7 @@
   min-height: 360px;
   overflow: hidden;
   border-radius: inherit;
-  background-image: radial-gradient(rgba(var(--v-theme-on-surface), 0.08) 1px, transparent 1px);
+  background-image: radial-gradient(rgba(var(--v-theme-on-surface), 0.07) 1px, transparent 1px);
   background-size: 22px 22px;
   background-repeat: repeat;
 }
@@ -494,6 +665,35 @@
 
 .tree-svg:active {
   cursor: grabbing;
+}
+
+.tree-svg :deep(.pulse) {
+  opacity: 0;
+}
+
+.tree-svg :deep(.pulse.pulsing) {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pulse 1.4s ease-out infinite;
+}
+
+@keyframes pulse {
+  0% {
+    opacity: 0.7;
+    transform: scale(0.97);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.12);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tree-svg :deep(.pulse.pulsing) {
+    animation: none;
+    opacity: 0.5;
+  }
 }
 
 .tree-overlay {
@@ -513,8 +713,23 @@
 }
 
 .tree-toolbar {
+  overflow: hidden;
   position: absolute;
+  top: 12px;
+  right: 12px;
+}
+
+.tree-bottom {
+  position: absolute;
+  left: 12px;
   right: 12px;
   bottom: 12px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.tree-bottom > :deep(*) {
+  pointer-events: auto;
 }
 </style>
