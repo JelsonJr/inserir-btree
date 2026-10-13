@@ -7,9 +7,12 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
-    AppFooter: typeof import('./components/AppFooter.vue')['default']
-    HelloWorld: typeof import('./components/HelloWorld.vue')['default']
+    ControlPanel: typeof import('./components/ControlPanel.vue')['default']
+    InfoTabs: typeof import('./components/InfoTabs.vue')['default']
+    PlaybackBar: typeof import('./components/PlaybackBar.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    StatsBar: typeof import('./components/StatsBar.vue')['default']
+    TreeCanvas: typeof import('./components/TreeCanvas.vue')['default']
   }
 }

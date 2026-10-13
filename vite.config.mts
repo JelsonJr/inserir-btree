@@ -23,7 +23,7 @@ export default defineConfig({
         'vue',
         {
           'vue-router/auto': ['useRoute', 'useRouter'],
-        }
+        },
       ],
       dts: 'src/auto-imports.d.ts',
       eslintrc: {
@@ -46,10 +46,17 @@ export default defineConfig({
     }),
     Fonts({
       google: {
-        families: [ {
+        families: [{
           name: 'Roboto',
-          styles: 'wght@100;300;400;500;700;900',
+          styles: 'wght@300;400;500;700',
         }],
+      },
+      // Não pré-carrega as fontes de ícones: o CSS do MDI as referencia com
+      // "?v=..." na URL, então o preload baixaria cada arquivo duas vezes
+      // (e os formatos legados eot/ttf/woff somam ~3 MB).
+      custom: {
+        families: [],
+        linkFilter: tags => tags.filter(tag => tag.attrs?.as !== 'font'),
       },
     }),
   ],
