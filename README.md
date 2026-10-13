@@ -24,13 +24,22 @@ e fusões — com animação.
 
 **Interface**
 
-- Animação **passo a passo** de cada operação, com reprodução, pausa, avanço/retrocesso
-  e controle de velocidade.
-- Desenho com nós em formato de "caixas de chaves", arestas saindo entre as chaves,
-  transições suaves, zoom/arraste e enquadramento automático.
+- Painel lateral **recolhível** (atalho `[`), organizado em seções: operação
+  sempre visível; inserção em lote, ordem/animação e benchmark em acordeão.
+  No modo recolhido, os ícones abrem o painel direto na seção escolhida.
+- Animação **passo a passo** com controle flutuante: reproduzir/pausar,
+  passo anterior/próximo, **linha do tempo arrastável**, velocidade de 0,25× a 4×
+  e modo de reprodução automática ou manual.
+- Animações fluidas (60 fps): nós criados por divisão surgem do nó original,
+  nós fundidos deslizam até o vizinho, chaves deslizam dentro do nó para abrir
+  espaço, o caminho percorrido fica destacado e o nó ativo pulsa. A duração das
+  transições acompanha a velocidade escolhida e respeita a preferência do
+  sistema por movimento reduzido.
+- Câmera que só se move quando necessário: reenquadra quando a árvore muda de
+  forma e desliza para manter o nó em destaque visível.
 - **Inserção em lote**: listas, chaves aleatórias (com intervalo) e sequências.
 - **Desfazer/refazer** (Ctrl+Z / Ctrl+Y), troca de ordem reconstruindo a árvore.
-- Estatísticas ao vivo: chaves, nós, altura, ocupação, mín/máx e validade.
+- Estatísticas compactas: chaves, nós, altura, ocupação, intervalo e validade.
 - Abas de **Registro**, **Percursos**, **Intervalo**, **Validação** e **Teoria**.
 - **Benchmark** de inserção/busca/remoção com até 1 milhão de chaves.
 - Exportação em **PNG**, **SVG** e **JSON**; importação de JSON.
@@ -40,9 +49,10 @@ e fusões — com animação.
 
 ## Como executar
 
-Requer Node.js 18+ (recomendado 22).
+Requer **Node.js 24.21.0** ou superior (versão definida em `.nvmrc`).
 
 ```bash
+nvm use            # opcional: usa a versão do .nvmrc
 npm install
 npm run dev        # servidor de desenvolvimento em http://localhost:3000
 ```
@@ -54,7 +64,7 @@ npm run dev        # servidor de desenvolvimento em http://localhost:3000
 | `npm run preview`    | Serve o build de produção                    |
 | `npm test`           | Testes unitários (Vitest)                    |
 | `npm run lint`       | ESLint                                       |
-| `npm run typecheck`  | Checagem de tipos (vue-tsc)                  |
+| `npm run typecheck`  | Checagem de tipos (vue-tsc + configs)        |
 | `npm run check`      | Lint + tipos + testes                        |
 
 ## Atalhos
@@ -66,12 +76,23 @@ npm run dev        # servidor de desenvolvimento em http://localhost:3000
 | `Ctrl` + `Z` / `Y`    | Desfazer / refazer                    |
 | `Espaço`              | Reproduzir / pausar a animação        |
 | `←` / `→`             | Passo anterior / próximo              |
+| `Home` / `End`        | Primeiro passo / resultado final      |
 | `F`                   | Enquadrar a árvore                    |
+| `[`                   | Recolher / expandir o painel          |
+| `Esc`                 | Sair do campo de valor                |
+
+## Tecnologias
+
+Vue 3.5, Vuetify 4, Pinia 4, D3 7, Vite 8, TypeScript 6, Vitest 5 e ESLint 10
+(configuração flat). As fontes (Roboto) são servidas localmente via
+`@fontsource/roboto`, sem depender do Google Fonts.
 
 ## Estrutura do projeto
 
 ```
 src/
+├── App.vue                # Layout: barra superior, painel lateral e área da árvore
+├── main.ts                # Inicialização (Vuetify, Pinia, fontes)
 ├── lib/
 │   ├── btree.ts           # Árvore B (inserção, remoção, busca, validação…)
 │   ├── btree.spec.ts      # Testes, incluindo testes aleatórios para cada ordem
@@ -79,12 +100,11 @@ src/
 ├── stores/
 │   └── btree.ts           # Estado (Pinia): histórico, animação, log, persistência
 ├── components/
-│   ├── TreeCanvas.vue     # Desenho D3 com zoom, destaques e exportação
-│   ├── ControlPanel.vue   # Operações, lote, configurações e benchmark
-│   ├── PlaybackBar.vue    # Controles da animação passo a passo
+│   ├── TreeCanvas.vue     # Desenho D3 com animações, câmera, zoom e exportação
+│   ├── ControlPanel.vue   # Painel lateral (operação, lote, ordem/animação, benchmark)
+│   ├── PlaybackBar.vue    # Controle flutuante da animação passo a passo
 │   ├── StatsBar.vue       # Estatísticas da árvore
 │   └── InfoTabs.vue       # Registro, percursos, intervalo, validação e teoria
-├── pages/index.vue        # Página principal
 └── plugins/vuetify.ts     # Temas claro e escuro
 ```
 

@@ -1,9 +1,13 @@
 {
   "compilerOptions": {
-    "composite": true,
+    "target": "ES2023",
+    "lib": ["ES2023"],
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "allowSyntheticDefaultImports": true
+    "types": ["node"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true
   },
-  "include": ["vite.config.mts"]
+  "include": ["vite.config.mts", "vitest.config.mts", "eslint.config.js"]
 }

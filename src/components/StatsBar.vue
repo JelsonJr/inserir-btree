@@ -1,23 +1,19 @@
 <template>
-  <div class="stats-grid">
-    <v-card
-      v-for="item in items"
-      :key="item.label"
-      border
-      class="stat"
-      flat
-      rounded="lg"
+  <div class="stats d-flex flex-wrap align-center">
+    <div v-for="item in items" :key="item.label" class="stat" :title="item.title ?? item.label">
+      <span class="value">{{ item.value }}</span>
+      <span class="name">{{ item.label }}</span>
+    </div>
+    <v-chip
+      class="ml-1"
+      :color="valid ? 'success' : 'error'"
+      :prepend-icon="valid ? 'mdi-check-circle-outline' : 'mdi-alert-circle-outline'"
+      size="small"
+      :title="valid ? 'Todas as invariantes da Árvore B são satisfeitas' : store.validationErrors[0]"
+      variant="tonal"
     >
-      <div class="d-flex align-center ga-3 pa-3">
-        <v-avatar :color="item.color" rounded="lg" size="36" variant="tonal">
-          <v-icon :icon="item.icon" size="20" />
-        </v-avatar>
-        <div class="min-w-0">
-          <div class="text-caption text-medium-emphasis text-truncate">{{ item.label }}</div>
-          <div class="font-weight-bold text-truncate stat-value" :class="item.value.length > 11 ? 'text-body-2' : 'text-subtitle-1'" :title="item.value">{{ item.value }}</div>
-        </div>
-      </div>
-    </v-card>
+      {{ valid ? 'válida' : `${store.validationErrors.length} erro(s)` }}
+    </v-chip>
   </div>
 </template>
 
@@ -30,53 +26,41 @@
   const compact = new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 1 })
   const short = (n: number) => Math.abs(n) >= 10_000 ? compact.format(n) : String(Number(n.toFixed(2)))
 
+  const valid = computed(() => store.validationErrors.length === 0)
+
   const items = computed(() => {
     const s = store.stats
-    const valid = store.validationErrors.length === 0
-    return [
-      { label: 'Chaves', value: nf.format(s.size), icon: 'mdi-key-outline', color: 'primary' },
-      { label: 'Nós', value: nf.format(s.nodes), icon: 'mdi-checkbox-blank-outline', color: 'secondary' },
-      { label: 'Altura', value: nf.format(s.height), icon: 'mdi-arrow-expand-vertical', color: 'info' },
-      { label: 'Ocupação', value: s.nodes ? `${Math.round(s.fill * 100)}%` : '—', icon: 'mdi-gauge', color: 'accent' },
-      {
-        label: 'Mín · Máx',
-        value: s.min === null ? '—' : `${short(s.min)} · ${short(s.max!)}`,
-        icon: 'mdi-arrow-left-right',
-        color: 'warning',
-      },
-      {
-        label: 'Invariantes',
-        value: valid ? 'Válida' : `${store.validationErrors.length} erro(s)`,
-        icon: valid ? 'mdi-shield-check-outline' : 'mdi-shield-alert-outline',
-        color: valid ? 'success' : 'error',
-      },
+    const list: Array<{ label: string, value: string, title?: string }> = [
+      { label: 'chaves', value: nf.format(s.size) },
+      { label: 'nós', value: nf.format(s.nodes) },
+      { label: 'altura', value: nf.format(s.height) },
+      { label: 'ocupação', value: s.nodes ? `${Math.round(s.fill * 100)}%` : '—', title: 'Ocupação média dos nós' },
     ]
+    if (s.min !== null) list.push({ label: 'intervalo', value: `${short(s.min)} – ${short(s.max!)}`, title: 'Menor e maior chave' })
+    return list
   })
 </script>
 
 <style scoped>
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
+.stats {
+  gap: 4px 20px;
 }
 
-@media (max-width: 599px) {
-  .stats-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
-  }
-
-  .stats-grid :deep(.v-avatar) {
-    display: none;
-  }
+.stat {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
 }
 
-.min-w-0 {
-  min-width: 0;
-}
-
-.stat-value {
+.value {
+  font-weight: 700;
+  font-size: 0.95rem;
   font-variant-numeric: tabular-nums;
+}
+
+.name {
+  font-size: 0.8rem;
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
 }
 </style>

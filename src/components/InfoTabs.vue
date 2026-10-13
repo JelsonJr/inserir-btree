@@ -1,11 +1,11 @@
 <template>
   <v-card border flat rounded="lg">
-    <v-tabs v-model="tab" color="primary" density="comfortable" show-arrows>
-      <v-tab prepend-icon="mdi-history" value="log">Registro</v-tab>
-      <v-tab prepend-icon="mdi-transit-connection-variant" value="traversal">Percursos</v-tab>
-      <v-tab prepend-icon="mdi-arrow-expand-horizontal" value="range">Intervalo</v-tab>
-      <v-tab prepend-icon="mdi-shield-check-outline" value="validation">Validação</v-tab>
-      <v-tab prepend-icon="mdi-school-outline" value="theory">Teoria</v-tab>
+    <v-tabs v-model="tab" color="primary" density="compact" show-arrows>
+      <v-tab value="log">Registro</v-tab>
+      <v-tab value="traversal">Percursos</v-tab>
+      <v-tab value="range">Intervalo</v-tab>
+      <v-tab value="validation">Validação</v-tab>
+      <v-tab value="theory">Teoria</v-tab>
     </v-tabs>
     <v-divider />
 

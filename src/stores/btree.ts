@@ -26,6 +26,8 @@ export interface Highlight {
   nodeIds: number[]
   key?: number
   kind?: StepKind
+  /** Nós já visitados na operação (rastro do caminho até o passo atual). */
+  trail?: number[]
 }
 
 export type LogLevel = 'success' | 'info' | 'warning' | 'error'
@@ -56,13 +58,17 @@ const LOG_LIMIT = 300
 export const TRACE_SIZE_LIMIT = 2000
 /** Máximo de chaves geradas por uma única operação em lote. */
 export const BULK_LIMIT = 20_000
-const BASE_STEP_DELAY = 900
+/** Duração base de um passo (velocidade 1×), em milissegundos. */
+const BASE_STEP_DELAY = 1100
+/** Tempo mínimo de pausa entre o fim de uma transição e o próximo passo. */
+const MIN_HOLD = 220
 
 interface Persisted {
   snapshot?: TreeSnapshot
   animate?: boolean
   speed?: number
   autoFit?: boolean
+  autoPlay?: boolean
 }
 
 function loadPersisted (): Persisted {
@@ -106,6 +112,8 @@ export const useBTreeStore = defineStore('btree', () => {
   const animate = ref(persisted.animate ?? true)
   const speed = ref(persisted.speed ?? 1)
   const autoFit = ref(persisted.autoFit ?? true)
+  /** Se falso, cada operação abre a reprodução pausada no primeiro passo. */
+  const autoPlay = ref(persisted.autoPlay ?? true)
 
   const steps = shallowRef<PlaybackStep[]>([])
   const stepIndex = ref(-1)
@@ -152,13 +160,21 @@ export const useBTreeStore = defineStore('btree', () => {
   const displaySnapshot = computed(() => currentStep.value?.snapshot ?? liveSnapshot.value)
   const highlight = computed<Highlight | null>(() => {
     const step = currentStep.value
-    if (step) return { nodeIds: step.nodeIds, key: step.key, kind: step.kind }
-    return finalHighlight.value
+    if (!step) return finalHighlight.value
+    // Rastro: nós visitados antes do passo atual, para mostrar o caminho percorrido.
+    const trail: number[] = []
+    for (let i = 0; i < stepIndex.value; i++) {
+      const previous = steps.value[i]
+      if (previous.kind === 'visit') trail.push(...previous.nodeIds)
+    }
+    return { nodeIds: step.nodeIds, key: step.key, kind: step.kind, trail }
   })
 
   const canUndo = computed(() => past.value.length > 0)
   const canRedo = computed(() => future.value.length > 0)
-  const stepDelay = computed(() => BASE_STEP_DELAY / Math.max(0.25, speed.value))
+  /** Duração das transições do desenho, proporcional à velocidade escolhida. */
+  const transitionMs = computed(() => Math.round(Math.min(700, Math.max(160, (BASE_STEP_DELAY * 0.5) / Math.max(0.25, speed.value)))))
+  const stepDelay = computed(() => Math.max(BASE_STEP_DELAY / Math.max(0.25, speed.value), transitionMs.value + MIN_HOLD))
 
   // ---------------------------------------------------------------------------
   // Registro
@@ -206,8 +222,12 @@ export const useBTreeStore = defineStore('btree', () => {
       return
     }
     stepIndex.value = 0
-    playing.value = true
-    scheduleNext()
+    if (autoPlay.value) {
+      playing.value = true
+      scheduleNext()
+    } else {
+      playing.value = false
+    }
   }
 
   function play () {
@@ -240,6 +260,12 @@ export const useBTreeStore = defineStore('btree', () => {
   function skipPlayback () {
     pause()
     stepIndex.value = -1
+  }
+
+  /** Define a velocidade (0,25× a 4×); se estiver tocando, reprograma o próximo passo. */
+  function setSpeed (value: number) {
+    speed.value = Math.min(4, Math.max(0.25, value))
+    if (playing.value) scheduleNext()
   }
 
   function resetPlayback () {
@@ -559,7 +585,7 @@ export const useBTreeStore = defineStore('btree', () => {
   // ---------------------------------------------------------------------------
 
   let saveTimer: ReturnType<typeof setTimeout> | undefined
-  watch([version, animate, speed, autoFit], () => {
+  watch([version, animate, speed, autoFit, autoPlay], () => {
     if (saveTimer !== undefined) clearTimeout(saveTimer)
     saveTimer = setTimeout(() => {
       try {
@@ -568,6 +594,7 @@ export const useBTreeStore = defineStore('btree', () => {
           animate: animate.value,
           speed: speed.value,
           autoFit: autoFit.value,
+          autoPlay: autoPlay.value,
         }
         localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
       } catch {
@@ -583,6 +610,8 @@ export const useBTreeStore = defineStore('btree', () => {
     animate,
     speed,
     autoFit,
+    autoPlay,
+    transitionMs,
     steps,
     stepIndex,
     playing,
@@ -623,6 +652,7 @@ export const useBTreeStore = defineStore('btree', () => {
     nextStep,
     prevStep,
     skipPlayback,
+    setSpeed,
     // registro
     addLog,
     clearLog,
